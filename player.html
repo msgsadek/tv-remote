@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Live TV player</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+  #p { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="p"></div>
+<script>
+/*
+ * YouTube player page for the Live TV app ("My Link").
+ * Opened by the TV app inside a frame as player.html?v=VIDEO_ID&t=START_SECONDS
+ * It tells the app where the video is (every 5 s and on events) and obeys simple commands,
+ * both with window.postMessage. Nothing secret is stored here.
+ *   to the app:   { source: 'ltv-player', type: 'ready'|'playing'|'paused'|'buffering'|'ended'|'error'|'time', v, t, dur, code? }
+ *   from the app: { target: 'ltv-player', cmd: 'play'|'pause'|'toggle'|'seek'|'getTime', delta? }
+ */
+(function () {
+  'use strict';
+  var params = new URLSearchParams(location.search);
+  var v = params.get('v') || '';
+  var start = Math.max(0, parseInt(params.get('t') || '0', 10) || 0);
+  var player = null, ready = false;
+
+  function post(type, extra) {
+    var m = { source: 'ltv-player', type: type, v: v, t: 0, dur: 0 };
+    try {
+      if (ready && player && player.getCurrentTime) { m.t = player.getCurrentTime() || 0; m.dur = player.getDuration() || 0; }
+    } catch (e) {}
+    if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) { m[k] = extra[k]; } } }
+    try { window.parent.postMessage(m, '*'); } catch (e) {}
+  }
+
+  if (!/^[A-Za-z0-9_\-]{11}$/.test(v)) { post('error', { code: 'bad-id' }); return; }
+
+  window.onYouTubeIframeAPIReady = function () {
+    player = new YT.Player('p', {
+      width: '100%', height: '100%', videoId: v,
+      playerVars: { autoplay: 1, start: start, controls: 1, rel: 0, playsinline: 1, modestbranding: 1, iv_load_policy: 3, fs: 0, origin: location.origin },
+      events: {
+        onReady: function (e) {
+          ready = true;
+          try { if (start) { e.target.seekTo(start, true); } e.target.playVideo(); } catch (x) {}
+          post('ready');
+        },
+        onStateChange: function (e) {
+          var S = YT.PlayerState;
+          if (e.data === S.PLAYING) { post('playing'); }
+          else if (e.data === S.PAUSED) { post('paused'); }
+          else if (e.data === S.BUFFERING) { post('buffering'); }
+          else if (e.data === S.ENDED) { post('ended'); }
+        },
+        onError: function (e) { post('error', { code: e.data }); }
+      }
+    });
+  };
+
+  window.addEventListener('message', function (e) {
+    var d = e.data;
+    if (!d || typeof d !== 'object' || d.target !== 'ltv-player' || typeof d.cmd !== 'string' || !ready) { return; }
+    try {
+      var S = YT.PlayerState;
+      if (d.cmd === 'play') { player.playVideo(); }
+      else if (d.cmd === 'pause') { player.pauseVideo(); }
+      else if (d.cmd === 'toggle') { if (player.getPlayerState() === S.PLAYING) { player.pauseVideo(); } else { player.playVideo(); } }
+      else if (d.cmd === 'seek' && typeof d.delta === 'number' && isFinite(d.delta)) {
+        var delta = Math.max(-600, Math.min(600, d.delta));
+        var dur = player.getDuration() || 0;
+        var t = Math.max(0, (player.getCurrentTime() || 0) + delta);
+        if (dur) { t = Math.min(t, dur - 2); }
+        player.seekTo(t, true);
+        setTimeout(function () { post('time'); }, 300);
+        return;
+      }
+      else if (d.cmd !== 'getTime') { return; }
+      post('time');
+    } catch (x) {}
+  });
+
+  setInterval(function () { if (ready) { post('time'); } }, 5000);
+
+  var s = document.createElement('script');
+  s.src = 'https://www.youtube.com/iframe_api';
+  s.onerror = function () { post('error', { code: 'api-load' }); };
+  document.head.appendChild(s);
+})();
+</script>
+</body>
+</html>
