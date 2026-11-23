@@ -94,13 +94,17 @@
   var CHANNELS = [
     { id: 'almanar', en: 'Al Manar', ar: 'قناة المنار' },
     { id: 'tv1',     en: 'IRIB TV1', ar: 'القناة الأولى' },
-    { id: 'tv2',     en: 'IRIB TV2', ar: 'القناة الثانية' },
-    { id: 'tv3',     en: 'IRIB TV3', ar: 'القناة الثالثة' },
+    { id: 'tv2',     en: 'IRIB TV2', ar: 'القناة الثانية', homeOnly: true },
+    { id: 'tv3',     en: 'IRIB TV3', ar: 'القناة الثالثة', homeOnly: true },
     { id: 'irinn',   en: 'IRINN',    ar: 'قناة الخبر' },
-    { id: 'nasim',   en: 'Nasim',    ar: 'قناة نسيم' },
+    { id: 'nasim',   en: 'Nasim',    ar: 'قناة نسيم', homeOnly: true },
     { id: 'quran',   en: 'Quran',    ar: 'قناة القرآن' },
-    { id: 'mylink',  en: 'My Link',  ar: 'منوعات', icon: '▶' }
+    { id: 'mylink',  en: 'My Link',  ar: 'منوعات', ar2: 'غوار', icon: '▶' }
   ];
+  // Second TV (PIN 2226) has the Arabic list without TV2, TV3 and Nasim, and calls My Link غوار.
+  var TV2_TOPIC = 'ltv-b73c20985a73269541f03c0b';
+  function isTv2() { return topic === TV2_TOPIC; }
+  function chName(c) { return (isTv2() && lang === 'ar' && c.ar2) ? c.ar2 : c[lang]; }
   var T = {
     ar: { enterPin: 'أدخل الرقم السري', wrongLen: 'الرقم السري من 4 أرقام على الأقل', noSubtle: 'افتح هذه الصفحة من رابط يبدأ بـ https',
           changePin: 'تغيير الرقم السري', nowOnTv: 'الآن على التلفاز', prev: '▲ السابقة', list: 'القائمة', next: 'التالية ▼',
@@ -185,6 +189,7 @@
     var box = $('channels');
     box.innerHTML = '';
     CHANNELS.forEach(function (c) {
+      if (c.homeOnly && isTv2()) { return; }
       var b = document.createElement('button');
       b.className = 'ch';
       b.setAttribute('data-ch', c.id);
@@ -194,7 +199,7 @@
       else { logo.textContent = c.icon || '▶'; }
       b.appendChild(logo);
       var n = document.createElement('span');
-      n.textContent = c[lang];
+      n.textContent = chName(c);
       b.appendChild(n);
       b.addEventListener('click', function () { send({ cmd: 'play', ch: c.id }, b); });
       box.appendChild(b);
