@@ -15,50 +15,84 @@
 <script>
 /*
  * YouTube player page for the Live TV app ("My Link").
- * Opened by the TV app inside a frame as player.html?v=VIDEO_ID&t=START_SECONDS
- * It tells the app where the video is (every 5 s and on events) and obeys simple commands,
- * both with window.postMessage. Nothing secret is stored here.
- *   to the app:   { source: 'ltv-player', type: 'ready'|'playing'|'paused'|'buffering'|'ended'|'error'|'time', v, t, dur, code? }
+ * Opened by the TV app inside a frame:
+ *   player.html?v=VIDEO_ID&t=START_SECONDS                 one video
+ *   player.html?list=PLAYLIST_ID&v=VIDEO_ID&t=START_SECONDS a playlist, starting at that video (v optional)
+ * It tells the app where it is (every 5 s and on events) and obeys simple commands, with window.postMessage.
+ * Nothing secret is stored here.
+ *   to the app:   { source: 'ltv-player', type: 'ready'|'playing'|'paused'|'buffering'|'ended'|'error'|'time',
+ *                   v, t, dur, list, idx, count, code? }
  *   from the app: { target: 'ltv-player', cmd: 'play'|'pause'|'toggle'|'seek'|'getTime', delta? }
  */
 (function () {
   'use strict';
   var params = new URLSearchParams(location.search);
   var v = params.get('v') || '';
+  var list = params.get('list') || '';
   var start = Math.max(0, parseInt(params.get('t') || '0', 10) || 0);
-  var player = null, ready = false;
+  var player = null, ready = false, positioned = false;
+  var ID = /^[A-Za-z0-9_\-]{11}$/, LIST = /^[A-Za-z0-9_\-]{10,64}$/;
 
-  function post(type, extra) {
-    var m = { source: 'ltv-player', type: type, v: v, t: 0, dur: 0 };
+  function current() {
+    var o = { v: v, t: 0, dur: 0, idx: -1, count: 0 };
     try {
-      if (ready && player && player.getCurrentTime) { m.t = player.getCurrentTime() || 0; m.dur = player.getDuration() || 0; }
+      if (ready && player) {
+        var d = player.getVideoData ? player.getVideoData() : null;
+        if (d && d.video_id) { o.v = d.video_id; }
+        o.t = player.getCurrentTime() || 0;
+        o.dur = player.getDuration() || 0;
+        if (list) {
+          var pl = player.getPlaylist() || [];
+          o.count = pl.length;
+          o.idx = player.getPlaylistIndex();
+        }
+      }
     } catch (e) {}
+    return o;
+  }
+  function post(type, extra) {
+    var c = current();
+    var m = { source: 'ltv-player', type: type, v: c.v, t: c.t, dur: c.dur, list: list, idx: c.idx, count: c.count };
     if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) { m[k] = extra[k]; } } }
     try { window.parent.postMessage(m, '*'); } catch (e) {}
   }
 
-  if (!/^[A-Za-z0-9_\-]{11}$/.test(v)) { post('error', { code: 'bad-id' }); return; }
+  if (list && !LIST.test(list)) { post('error', { code: 'bad-list' }); return; }
+  if (!list && !ID.test(v)) { post('error', { code: 'bad-id' }); return; }
+  if (v && !ID.test(v)) { v = ''; }
+
+  // Playlist: jump to the remembered video (matched by id, so added/removed videos do not matter).
+  function positionInPlaylist() {
+    if (positioned || !list) { return; }
+    var pl = [];
+    try { pl = player.getPlaylist() || []; } catch (e) {}
+    if (!pl.length) { return; }
+    positioned = true;
+    var i = v ? pl.indexOf(v) : -1;
+    if (i > 0) { player.playVideoAt(i); if (start) { setTimeout(function () { try { player.seekTo(start, true); } catch (e) {} }, 1500); } }
+    else if (i === 0 && start) { player.seekTo(start, true); }
+  }
 
   window.onYouTubeIframeAPIReady = function () {
-    player = new YT.Player('p', {
-      width: '100%', height: '100%', videoId: v,
-      playerVars: { autoplay: 1, start: start, controls: 1, rel: 0, playsinline: 1, modestbranding: 1, iv_load_policy: 3, fs: 0, origin: location.origin },
-      events: {
-        onReady: function (e) {
-          ready = true;
-          try { if (start) { e.target.seekTo(start, true); } e.target.playVideo(); } catch (x) {}
-          post('ready');
-        },
-        onStateChange: function (e) {
-          var S = YT.PlayerState;
-          if (e.data === S.PLAYING) { post('playing'); }
-          else if (e.data === S.PAUSED) { post('paused'); }
-          else if (e.data === S.BUFFERING) { post('buffering'); }
-          else if (e.data === S.ENDED) { post('ended'); }
-        },
-        onError: function (e) { post('error', { code: e.data }); }
-      }
-    });
+    var vars = { autoplay: 1, controls: 1, rel: 0, playsinline: 1, modestbranding: 1, iv_load_policy: 3, fs: 0, origin: location.origin };
+    var opts = { width: '100%', height: '100%', playerVars: vars, events: {} };
+    if (list) { vars.listType = 'playlist'; vars.list = list; }
+    else { opts.videoId = v; vars.start = start; }
+    opts.events.onReady = function (e) {
+      ready = true;
+      try { if (!list && start) { e.target.seekTo(start, true); } e.target.playVideo(); } catch (x) {}
+      post('ready');
+    };
+    opts.events.onStateChange = function (e) {
+      var S = YT.PlayerState;
+      if (list && !positioned && (e.data === S.PLAYING || e.data === S.CUED || e.data === S.BUFFERING)) { positionInPlaylist(); }
+      if (e.data === S.PLAYING) { post('playing'); }
+      else if (e.data === S.PAUSED) { post('paused'); }
+      else if (e.data === S.BUFFERING) { post('buffering'); }
+      else if (e.data === S.ENDED) { post('ended'); }
+    };
+    opts.events.onError = function (e) { post('error', { code: e.data }); };
+    player = new YT.Player('p', opts);
   };
 
   window.addEventListener('message', function (e) {
